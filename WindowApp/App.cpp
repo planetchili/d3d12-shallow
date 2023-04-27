@@ -7,7 +7,10 @@
 #pragma warning(disable : 26495)
 #include "d3dx12.h" 
 #pragma warning(pop)
-#include <wrl.h> 
+#include <wrl.h>
+
+#include <cmath> 
+#include <numbers> 
 
 namespace chil::app
 {
@@ -120,6 +123,8 @@ namespace chil::app
 
 		// render loop 
 		UINT curBackBufferIndex;
+		float t = 0.f;
+		constexpr float step = 0.01f;
 		while (!window.IsClosing()) {
 			// advance back buffer
 			curBackBufferIndex = swapChain->GetCurrentBackBufferIndex();
@@ -135,8 +140,14 @@ namespace chil::app
 					backBuffer.Get(),
 					D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
 				commandList->ResourceBarrier(1, &barrier);
-				// clear buffer 
-				FLOAT clearColor[] = { 0.4f, 0.6f, 0.9f, 1.0f };
+				// calculate clear color 
+				const FLOAT clearColor[] = {
+					sin(2.f * t + 1.f) / 2.f + .5f,
+					sin(3.f * t + 2.f) / 2.f + .5f,
+					sin(5.f * t + 3.f) / 2.f + .5f,
+					1.0f
+				};
+				// clear rtv 
 				const CD3DX12_CPU_DESCRIPTOR_HANDLE rtv{
 					rtvDescriptorHeap->GetCPUDescriptorHandleForHeapStart(),
 					(INT)curBackBufferIndex, rtvDescriptorSize };
@@ -160,11 +171,15 @@ namespace chil::app
 			// insert fence to mark command list completion 
 			commandQueue->Signal(fence.Get(), fenceValue++) >> chk;
 			// present frame 
-			swapChain->Present(0, 0) >> chk;
+			swapChain->Present(1, 0) >> chk;
 			// wait for command list / allocator to become free 
 			fence->SetEventOnCompletion(fenceValue - 1, fenceEvent) >> chk;
 			if (WaitForSingleObject(fenceEvent, INFINITE) == WAIT_FAILED) {
 				GetLastError() >> chk;
+			}
+			// update simulation time 
+			if ((t += step) >= 2.f * std::numbers::pi_v<float>) {
+				t = 0.f;
 			}
 		}
 
