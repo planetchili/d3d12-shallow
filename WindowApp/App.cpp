@@ -23,6 +23,13 @@ namespace chil::app
 		constexpr UINT height = 720;
 		constexpr UINT bufferCount = 2;
 
+		// enable the software debug layer for d3d12 
+		{
+			ComPtr<ID3D12Debug> debugController;
+			D3D12GetDebugInterface(IID_PPV_ARGS(&debugController)) >> chk;
+			debugController->EnableDebugLayer();
+		}
+
 		// dxgi factory 
 		ComPtr<IDXGIFactory4> dxgiFactory;
 		CreateDXGIFactory2(DXGI_CREATE_FACTORY_DEBUG, IID_PPV_ARGS(&dxgiFactory)) >> chk;
@@ -181,6 +188,13 @@ namespace chil::app
 			if ((t += step) >= 2.f * std::numbers::pi_v<float>) {
 				t = 0.f;
 			}
+		}
+
+		// wait for queue to become completely empty (2 seconds max) 
+		commandQueue->Signal(fence.Get(), fenceValue) >> chk;
+		fence->SetEventOnCompletion(fenceValue, fenceEvent) >> chk;
+		if (WaitForSingleObject(fenceEvent, 2000) == WAIT_FAILED) {
+			GetLastError() >> chk;
 		}
 
 		return 0;
