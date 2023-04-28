@@ -3,6 +3,7 @@
 
 #include <d3d12.h> 
 #include <dxgi1_6.h> 
+#include <DirectXMath.h> 
 #pragma warning(push)
 #pragma warning(disable : 26495)
 #include "d3dx12.h" 
@@ -11,10 +12,13 @@
 
 #include <cmath> 
 #include <numbers> 
+#include <ranges>
 
 namespace chil::app
 {
 	using Microsoft::WRL::ComPtr;
+	using namespace DirectX;
+	namespace rn = std::ranges;
 
 	int Run(win::IWindow& window)
 	{
@@ -128,6 +132,82 @@ namespace chil::app
 			throw std::runtime_error{ "Failed to create fence event" };
 		}
 
+		// data structure for vertex data 
+		struct Vertex
+		{
+			XMFLOAT3 position;
+			XMFLOAT3 color;
+		};
+
+		// create vertex buffer 
+		ComPtr<ID3D12Resource> vertexBuffer;
+		UINT nVertices;
+		{
+			// the content data 
+			const Vertex vertexData[] = {
+				{ {  0.00f,  0.50f, 0.0f }, { 1.0f, 0.0f, 0.0f } }, // top 
+				{ {  0.43f, -0.25f, 0.0f }, { 0.0f, 0.0f, 1.0f } }, // right 
+				{ { -0.43f, -0.25f, 0.0f }, { 0.0f, 1.0f, 0.0f } }, // left 
+			};
+			// set the vertex count 
+			nVertices = (UINT)std::size(vertexData);
+			// create committed resource for vertex buffer 
+			{
+				const CD3DX12_HEAP_PROPERTIES heapProps{ D3D12_HEAP_TYPE_DEFAULT };
+				const auto resourceDesc = CD3DX12_RESOURCE_DESC::Buffer(sizeof(vertexData));
+				device->CreateCommittedResource(
+					&heapProps,
+					D3D12_HEAP_FLAG_NONE,
+					&resourceDesc,
+					D3D12_RESOURCE_STATE_COPY_DEST,
+					nullptr, IID_PPV_ARGS(&vertexBuffer)
+				) >> chk;
+			}
+			// create committed resource for cpu upload of vertex data 
+			ComPtr<ID3D12Resource> vertexUploadBuffer;
+			{
+				const CD3DX12_HEAP_PROPERTIES heapProps{ D3D12_HEAP_TYPE_UPLOAD };
+				const auto resourceDesc = CD3DX12_RESOURCE_DESC::Buffer(sizeof(vertexData));
+				device->CreateCommittedResource(
+					&heapProps,
+					D3D12_HEAP_FLAG_NONE,
+					&resourceDesc,
+					D3D12_RESOURCE_STATE_GENERIC_READ,
+					nullptr, IID_PPV_ARGS(&vertexUploadBuffer)
+				) >> chk;
+			}
+			// copy array of vertex data to upload buffer 
+			{
+				Vertex* mappedVertexData = nullptr;
+				vertexUploadBuffer->Map(0, nullptr, reinterpret_cast<void**>(&mappedVertexData)) >> chk;
+				rn::copy(vertexData, mappedVertexData);
+				vertexUploadBuffer->Unmap(0, nullptr);
+			}
+			// reset command list and allocator  
+			commandAllocator->Reset() >> chk;
+			commandList->Reset(commandAllocator.Get(), nullptr) >> chk;
+			// copy upload buffer to vertex buffer 
+			commandList->CopyResource(vertexBuffer.Get(), vertexUploadBuffer.Get());
+			// close command list  
+			commandList->Close() >> chk;
+			// submit command list to queue as array with single element 
+			ID3D12CommandList* const commandLists[] = { commandList.Get() };
+			commandQueue->ExecuteCommandLists((UINT)std::size(commandLists), commandLists);
+			// insert fence to detect when upload is complete 
+			commandQueue->Signal(fence.Get(), ++fenceValue) >> chk;
+			fence->SetEventOnCompletion(fenceValue, fenceEvent) >> chk;
+			if (WaitForSingleObject(fenceEvent, INFINITE) == WAIT_FAILED) {
+				GetLastError() >> chk;
+			}
+		}
+
+		// Create the vertex buffer view. 
+		const D3D12_VERTEX_BUFFER_VIEW vertexBufferView{
+			.BufferLocation = vertexBuffer->GetGPUVirtualAddress(),
+			.SizeInBytes = nVertices * sizeof(Vertex),
+			.StrideInBytes = sizeof(Vertex),
+		};
+
 		// render loop 
 		UINT curBackBufferIndex;
 		float t = 0.f;
@@ -176,11 +256,11 @@ namespace chil::app
 				commandQueue->ExecuteCommandLists((UINT)std::size(commandLists), commandLists);
 			}
 			// insert fence to mark command list completion 
-			commandQueue->Signal(fence.Get(), fenceValue++) >> chk;
+			commandQueue->Signal(fence.Get(), ++fenceValue) >> chk;
 			// present frame 
 			swapChain->Present(1, 0) >> chk;
 			// wait for command list / allocator to become free 
-			fence->SetEventOnCompletion(fenceValue - 1, fenceEvent) >> chk;
+			fence->SetEventOnCompletion(fenceValue, fenceEvent) >> chk;
 			if (WaitForSingleObject(fenceEvent, INFINITE) == WAIT_FAILED) {
 				GetLastError() >> chk;
 			}
@@ -191,7 +271,7 @@ namespace chil::app
 		}
 
 		// wait for queue to become completely empty (2 seconds max) 
-		commandQueue->Signal(fence.Get(), fenceValue) >> chk;
+		commandQueue->Signal(fence.Get(), ++fenceValue) >> chk;
 		fence->SetEventOnCompletion(fenceValue, fenceEvent) >> chk;
 		if (WaitForSingleObject(fenceEvent, 2000) == WAIT_FAILED) {
 			GetLastError() >> chk;
