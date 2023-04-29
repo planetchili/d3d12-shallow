@@ -214,13 +214,22 @@ namespace chil::app
 		// create root signature 
 		ComPtr<ID3D12RootSignature> rootSignature;
 		{
-			// define root signature with a matrix of 16 32-bit floats used by the vertex shader (rotation matrix) 
+			// define root signature with a matrix of 16 32-bit floats used by the vertex shader (mvp matrix) 
 			CD3DX12_ROOT_PARAMETER rootParameters[1]{};
 			rootParameters[0].InitAsConstants(sizeof(XMMATRIX) / 4, 0, 0, D3D12_SHADER_VISIBILITY_VERTEX);
+			// Allow input layout and vertex shader and deny unnecessary access to certain pipeline stages.
+			const D3D12_ROOT_SIGNATURE_FLAGS rootSignatureFlags =
+				D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT |
+				D3D12_ROOT_SIGNATURE_FLAG_DENY_MESH_SHADER_ROOT_ACCESS |
+				D3D12_ROOT_SIGNATURE_FLAG_DENY_AMPLIFICATION_SHADER_ROOT_ACCESS |
+				D3D12_ROOT_SIGNATURE_FLAG_DENY_HULL_SHADER_ROOT_ACCESS |
+				D3D12_ROOT_SIGNATURE_FLAG_DENY_DOMAIN_SHADER_ROOT_ACCESS |
+				D3D12_ROOT_SIGNATURE_FLAG_DENY_GEOMETRY_SHADER_ROOT_ACCESS |
+				D3D12_ROOT_SIGNATURE_FLAG_DENY_PIXEL_SHADER_ROOT_ACCESS;
 			// define root signature with transformation matrix
 			CD3DX12_ROOT_SIGNATURE_DESC rootSignatureDesc;
 			rootSignatureDesc.Init((UINT)std::size(rootParameters), rootParameters,
-				0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
+				0, nullptr, rootSignatureFlags);
 			// serialize root signature 
 			ComPtr<ID3DBlob> signatureBlob;
 			ComPtr<ID3DBlob> errorBlob;
@@ -290,6 +299,21 @@ namespace chil::app
 		// define viewport 
 		const CD3DX12_VIEWPORT viewport{ 0.0f, 0.0f, float(width), float(height) };
 
+		// set view projection matrix
+		XMMATRIX viewProjection;
+		{
+			// setup view (camera) matrix
+			const auto eyePosition = XMVectorSet(0, 0, -1, 1);
+			const auto focusPoint = XMVectorSet(0, 0, 0, 1);
+			const auto upDirection = XMVectorSet(0, 1, 0, 0);
+			const auto view = XMMatrixLookAtLH(eyePosition, focusPoint, upDirection);
+			// setup perspective projection matrix
+			const auto aspectRatio = float(width) / float(height);
+			const auto projection = XMMatrixPerspectiveFovLH(XMConvertToRadians(65.f), aspectRatio, 0.1f, 100.0f);
+			// combine matrices
+			viewProjection = XMMatrixMultiply(view, projection);
+		}
+
 		// render loop 
 		UINT curBackBufferIndex;
 		float t = 0.f;
@@ -335,8 +359,8 @@ namespace chil::app
 			// bind render target 
 			commandList->OMSetRenderTargets(1, &rtv, TRUE, nullptr);
 			// bind the transformation matrix
-			const auto rotationMatrix = XMMatrixTranspose(XMMatrixRotationZ(t));
-			commandList->SetGraphicsRoot32BitConstants(0, sizeof(rotationMatrix) / 4, &rotationMatrix, 0);
+			const auto mvp = XMMatrixMultiply(XMMatrixRotationZ(t), viewProjection);
+			commandList->SetGraphicsRoot32BitConstants(0, sizeof(mvp) / 4, &mvp, 0);
 			// draw the geometry 
 			commandList->DrawInstanced(nVertices, 1, 0, 0);
 			// prepare buffer for presentation by transitioning to present state
