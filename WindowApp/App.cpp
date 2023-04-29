@@ -1,8 +1,11 @@
 #include "App.h"
 #include "GraphicsError.h"
+#include <Core/src/log/Log.h> 
+#include <Core/src/utl/String.h> 
 
 #include <d3d12.h> 
 #include <dxgi1_6.h> 
+#include <d3dcompiler.h> 
 #include <DirectXMath.h> 
 #pragma warning(push)
 #pragma warning(disable : 26495)
@@ -208,6 +211,81 @@ namespace chil::app
 			.StrideInBytes = sizeof(Vertex),
 		};
 
+		// create root signature 
+		ComPtr<ID3D12RootSignature> rootSignature;
+		{
+			// define empty root signature 
+			CD3DX12_ROOT_SIGNATURE_DESC rootSignatureDesc;
+			rootSignatureDesc.Init(0, nullptr, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
+			// serialize root signature 
+			ComPtr<ID3DBlob> signatureBlob;
+			ComPtr<ID3DBlob> errorBlob;
+			if (const auto hr = D3D12SerializeRootSignature(
+				&rootSignatureDesc, D3D_ROOT_SIGNATURE_VERSION_1,
+				&signatureBlob, &errorBlob); FAILED(hr)) {
+				if (errorBlob) {
+					auto errorBufferPtr = static_cast<const char*>(errorBlob->GetBufferPointer());
+					chilog.error(utl::ToWide(errorBufferPtr)).no_trace();
+				}
+				hr >> chk;
+			}
+			// Create the root signature. 
+			device->CreateRootSignature(0, signatureBlob->GetBufferPointer(),
+				signatureBlob->GetBufferSize(), IID_PPV_ARGS(&rootSignature)) >> chk;
+		}
+
+		// creating pipeline state object 
+		ComPtr<ID3D12PipelineState> pipelineState;
+		{
+			// static declaration of pso stream structure 
+			struct PipelineStateStream
+			{
+				CD3DX12_PIPELINE_STATE_STREAM_ROOT_SIGNATURE RootSignature;
+				CD3DX12_PIPELINE_STATE_STREAM_INPUT_LAYOUT InputLayout;
+				CD3DX12_PIPELINE_STATE_STREAM_PRIMITIVE_TOPOLOGY PrimitiveTopologyType;
+				CD3DX12_PIPELINE_STATE_STREAM_VS VS;
+				CD3DX12_PIPELINE_STATE_STREAM_PS PS;
+				CD3DX12_PIPELINE_STATE_STREAM_RENDER_TARGET_FORMATS RTVFormats;
+			} pipelineStateStream;
+
+			// define the Vertex input layout 
+			const D3D12_INPUT_ELEMENT_DESC inputLayout[] = {
+				{ "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+				{ "COLOR", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, D3D12_APPEND_ALIGNED_ELEMENT, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+			};
+
+			// Load the vertex shader. 
+			ComPtr<ID3DBlob> vertexShaderBlob;
+			D3DReadFileToBlob(L"VertexShader.cso", &vertexShaderBlob) >> chk;
+
+			// Load the pixel shader. 
+			ComPtr<ID3DBlob> pixelShaderBlob;
+			D3DReadFileToBlob(L"PixelShader.cso", &pixelShaderBlob) >> chk;
+
+			// filling pso structure 
+			pipelineStateStream.RootSignature = rootSignature.Get();
+			pipelineStateStream.InputLayout = { inputLayout, (UINT)std::size(inputLayout) };
+			pipelineStateStream.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+			pipelineStateStream.VS = CD3DX12_SHADER_BYTECODE(vertexShaderBlob.Get());
+			pipelineStateStream.PS = CD3DX12_SHADER_BYTECODE(pixelShaderBlob.Get());
+			pipelineStateStream.RTVFormats = {
+				.RTFormats{ DXGI_FORMAT_R8G8B8A8_UNORM },
+				.NumRenderTargets = 1,
+			};
+
+			// building the pipeline state object 
+			const D3D12_PIPELINE_STATE_STREAM_DESC pipelineStateStreamDesc = {
+				sizeof(PipelineStateStream), &pipelineStateStream
+			};
+			device->CreatePipelineState(&pipelineStateStreamDesc, IID_PPV_ARGS(&pipelineState)) >> chk;
+		}
+
+		// define scissor rect 
+		const CD3DX12_RECT scissorRect{ 0, 0, LONG_MAX, LONG_MAX };
+
+		// define viewport 
+		const CD3DX12_VIEWPORT viewport{ 0.0f, 0.0f, float(width), float(height) };
+
 		// render loop 
 		UINT curBackBufferIndex;
 		float t = 0.f;
@@ -220,6 +298,10 @@ namespace chil::app
 			// reset command list and allocator 
 			commandAllocator->Reset() >> chk;
 			commandList->Reset(commandAllocator.Get(), nullptr) >> chk;
+			// get rtv handle for the buffer used in this frame
+			const CD3DX12_CPU_DESCRIPTOR_HANDLE rtv{
+				rtvDescriptorHeap->GetCPUDescriptorHandleForHeapStart(),
+				(INT)curBackBufferIndex, rtvDescriptorSize };
 			// clear the render target 
 			{
 				// transition buffer resource to render target state 
@@ -235,11 +317,21 @@ namespace chil::app
 					1.0f
 				};
 				// clear rtv 
-				const CD3DX12_CPU_DESCRIPTOR_HANDLE rtv{
-					rtvDescriptorHeap->GetCPUDescriptorHandleForHeapStart(),
-					(INT)curBackBufferIndex, rtvDescriptorSize };
 				commandList->ClearRenderTargetView(rtv, clearColor, 0, nullptr);
 			}
+			// set pipeline state 
+			commandList->SetPipelineState(pipelineState.Get());
+			commandList->SetGraphicsRootSignature(rootSignature.Get());
+			// configure IA 
+			commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+			commandList->IASetVertexBuffers(0, 1, &vertexBufferView);
+			// configure RS 
+			commandList->RSSetViewports(1, &viewport);
+			commandList->RSSetScissorRects(1, &scissorRect);
+			// bind render target 
+			commandList->OMSetRenderTargets(1, &rtv, TRUE, nullptr);
+			// draw the geometry 
+			commandList->DrawInstanced(nVertices, 1, 0, 0);
 			// prepare buffer for presentation by transitioning to present state
 			{
 				const auto barrier = CD3DX12_RESOURCE_BARRIER::Transition(
