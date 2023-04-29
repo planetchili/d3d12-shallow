@@ -214,9 +214,13 @@ namespace chil::app
 		// create root signature 
 		ComPtr<ID3D12RootSignature> rootSignature;
 		{
-			// define empty root signature 
+			// define root signature with a matrix of 16 32-bit floats used by the vertex shader (rotation matrix) 
+			CD3DX12_ROOT_PARAMETER rootParameters[1]{};
+			rootParameters[0].InitAsConstants(sizeof(XMMATRIX) / 4, 0, 0, D3D12_SHADER_VISIBILITY_VERTEX);
+			// define root signature with transformation matrix
 			CD3DX12_ROOT_SIGNATURE_DESC rootSignatureDesc;
-			rootSignatureDesc.Init(0, nullptr, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
+			rootSignatureDesc.Init((UINT)std::size(rootParameters), rootParameters,
+				0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
 			// serialize root signature 
 			ComPtr<ID3DBlob> signatureBlob;
 			ComPtr<ID3DBlob> errorBlob;
@@ -330,6 +334,9 @@ namespace chil::app
 			commandList->RSSetScissorRects(1, &scissorRect);
 			// bind render target 
 			commandList->OMSetRenderTargets(1, &rtv, TRUE, nullptr);
+			// bind the transformation matrix
+			const auto rotationMatrix = XMMatrixTranspose(XMMatrixRotationZ(t));
+			commandList->SetGraphicsRoot32BitConstants(0, sizeof(rotationMatrix) / 4, &rotationMatrix, 0);
 			// draw the geometry 
 			commandList->DrawInstanced(nVertices, 1, 0, 0);
 			// prepare buffer for presentation by transitioning to present state
