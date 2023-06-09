@@ -311,7 +311,7 @@ namespace chil::app
 			const auto aspectRatio = float(width) / float(height);
 			const auto projection = XMMatrixPerspectiveFovLH(XMConvertToRadians(65.f), aspectRatio, 0.1f, 100.0f);
 			// combine matrices
-			viewProjection = XMMatrixMultiply(view, projection);
+			viewProjection = view * projection;
 		}
 
 		// render loop 
@@ -359,7 +359,7 @@ namespace chil::app
 			// bind render target 
 			commandList->OMSetRenderTargets(1, &rtv, TRUE, nullptr);
 			// bind the transformation matrix
-			const auto mvp = XMMatrixMultiply(XMMatrixRotationZ(t), viewProjection);
+			const auto mvp = XMMatrixTranspose(XMMatrixRotationZ(t) * viewProjection);
 			commandList->SetGraphicsRoot32BitConstants(0, sizeof(mvp) / 4, &mvp, 0);
 			// draw the geometry 
 			commandList->DrawInstanced(nVertices, 1, 0, 0);

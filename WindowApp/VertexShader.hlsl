@@ -15,7 +15,7 @@ Output main(float3 pos : POSITION, float3 color : COLOR)
 {
 	Output vertexOut;
 
-	vertexOut.Position = mul(rot.transform, float4(pos, 1.0f));;
+	vertexOut.Position = mul(float4(pos, 1.0f), rot.transform);
 	vertexOut.Color = float4(color, 1.0f);
 
 	return vertexOut;
