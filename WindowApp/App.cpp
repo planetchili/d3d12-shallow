@@ -177,7 +177,6 @@ namespace chil::app
 		struct Vertex
 		{
 			XMFLOAT3 position;
-			XMFLOAT3 color;
 		};
 
 		// create vertex buffer 
